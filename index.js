@@ -116,34 +116,25 @@ async function generateTranscript(channel, ticket) {
         const filename = `ticket-${ticket.id}-${timestamp}.txt`;
         const filepath = path.join(CONFIG.TRANSCRIPTS_DIR, filename);
         
-        let transcript = `╔══════════════════════════════════════════════════════════╗\n`;
-        transcript += `║                      TICKET TRANSCRIPT                       ║\n`;
-        transcript += `╠══════════════════════════════════════════════════════════╣\n`;
-        transcript += `║                                                          ║\n`;
-        transcript += `║  Ticket ID: ${ticket.id.padEnd(44)}║\n`;
-        transcript += `║  User: ${ticket.username.padEnd(47)}║\n`;
-        transcript += `║  User ID: ${ticket.userId.padEnd(45)}║\n`;
-        transcript += `║  Opened: ${new Date(ticket.openedAt).toLocaleString().padEnd(43)}║\n`;
+        let transcript = `Ticket ID: ${ticket.id}\n`;
+        transcript += `User: ${ticket.username} (${ticket.userId})\n`;
+        transcript += `Opened: ${new Date(ticket.openedAt).toLocaleString()}\n`;
         
         if (ticket.claimed) {
-            transcript += `║  Claimed: ${new Date(ticket.claimedAt).toLocaleString().padEnd(43)}║\n`;
-            transcript += `║  Claimed by: ${ticket.claimedBy.padEnd(41)}║\n`;
+            transcript += `Claimed: ${new Date(ticket.claimedAt).toLocaleString()} by ${ticket.claimedBy}\n`;
         }
         
         if (ticket.closed) {
-            transcript += `║  Closed: ${new Date(ticket.closedAt).toLocaleString().padEnd(43)}║\n`;
-            transcript += `║  Closed by: ${ticket.closedBy.padEnd(41)}║\n`;
+            transcript += `Closed: ${new Date(ticket.closedAt).toLocaleString()} by ${ticket.closedBy}\n`;
         }
         
-        transcript += `║                                                          ║\n`;
-        transcript += `╠══════════════════════════════════════════════════════════╣\n`;
-        transcript += `║                       MESSAGES                           ║\n`;
-        transcript += `╠══════════════════════════════════════════════════════════╣\n\n`;
+        transcript += `\n========== MESSAGES ==========\n\n`;
         
+        // Fetch messages more efficiently with smaller batch
         let messages = [];
         let lastId;
         
-        while (true) {
+        for (let i = 0; i < 10; i++) { // Limit to 1000 messages max
             const options = { limit: 100 };
             if (lastId) options.before = lastId;
             
@@ -167,19 +158,13 @@ async function generateTranscript(channel, ticket) {
             transcript += `${content}\n`;
             
             if (msg.attachments.size > 0) {
-                transcript += `[Attachments: ${msg.attachments.map(a => a.name).join(', ')}]\n`;
+                transcript += `[Attachments: ${msg.attachments.size}]\n`;
             }
             
-            if (msg.embeds.length > 0) {
-                transcript += `[Embeds: ${msg.embeds.length}]\n`;
-            }
-            
-            transcript += `\n${'-'.repeat(60)}\n\n`;
+            transcript += `\n`;
         });
         
-        transcript += `\n╔══════════════════════════════════════════════════════════╗\n`;
-        transcript += `║                     END OF TRANSCRIPT                      ║\n`;
-        transcript += `╚══════════════════════════════════════════════════════════╝\n`;
+        transcript += `\n========== END OF TRANSCRIPT ==========\n`;
         
         fs.writeFileSync(filepath, transcript, 'utf8');
         
@@ -207,11 +192,9 @@ async function sendTranscriptToChannel(guild, ticket, transcriptData) {
             .setDescription(`Transcript for ticket **${ticket.id}**`)
             .setColor(0x3498db)
             .addFields(
-                { name: 'User', value: `<@${ticket.userId}> (${ticket.username})`, inline: true },
+                { name: 'User', value: `<@${ticket.userId}>`, inline: true },
                 { name: 'Ticket ID', value: ticket.id, inline: true },
-                { name: 'Status', value: ticket.closed ? 'Closed' : 'Open', inline: true },
-                { name: 'Opened', value: `<t:${Math.floor(new Date(ticket.openedAt).getTime() / 1000)}:R>`, inline: true },
-                { name: 'Closed', value: ticket.closedAt ? `<t:${Math.floor(new Date(ticket.closedAt).getTime() / 1000)}:R>` : 'N/A', inline: true }
+                { name: 'Status', value: 'Closed', inline: true }
             )
             .setTimestamp()
             .setFooter({ text: `Ticket Transcript` });
@@ -272,8 +255,13 @@ client.on(Events.InteractionCreate, async interaction => {
 client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isButton()) return;
 
+    // Handle opening ticket - RESPOND IMMEDIATELY
     if (interaction.customId === 'open_ticket') {
-        await interaction.deferReply({ ephemeral: true });
+        // Respond immediately
+        await interaction.reply({ 
+            content: '⏳ Creating your ticket...',
+            flags: 64
+        });
 
         const ticketId = generateTicketId();
         const guild = interaction.guild;
@@ -349,29 +337,30 @@ client.on(Events.InteractionCreate, async interaction => {
         }
     }
 
+    // Handle claim/close buttons
     if (interaction.customId.startsWith('claim_') || interaction.customId.startsWith('close_')) {
+        // RESPOND IMMEDIATELY to avoid timeout
+        await interaction.deferReply();
+        
         const ticketId = interaction.customId.split('_')[1];
         const ticket = tickets[ticketId];
 
         if (!interaction.member.roles.cache.has(CONFIG.CUSTOM_ROLE_ID)) {
-            return interaction.reply({ 
-                content: '❌ Only support staff can interact with these buttons.',
-                flags: 64
+            return interaction.editReply({ 
+                content: '❌ Only support staff can interact with these buttons.'
             });
         }
 
         if (!ticket) {
-            return interaction.reply({ 
-                content: '❌ Ticket not found.',
-                flags: 64
+            return interaction.editReply({ 
+                content: '❌ Ticket not found.'
             });
         }
 
         if (interaction.customId.startsWith('claim_')) {
             if (ticket.claimed) {
-                return interaction.reply({ 
-                    content: '❌ This ticket is already claimed.',
-                    flags: 64
+                return interaction.editReply({ 
+                    content: '❌ This ticket is already claimed.'
                 });
             }
 
@@ -380,7 +369,7 @@ client.on(Events.InteractionCreate, async interaction => {
             ticket.claimedAt = new Date().toISOString();
             saveTickets();
 
-            await interaction.reply({ 
+            await interaction.editReply({ 
                 content: `✅ Ticket claimed by ${interaction.user.tag}` 
             });
 
@@ -391,43 +380,18 @@ client.on(Events.InteractionCreate, async interaction => {
 
         } else if (interaction.customId.startsWith('close_')) {
             if (ticket.closed) {
-                return interaction.reply({ 
-                    content: '❌ This ticket is already closed.',
-                    flags: 64
+                return interaction.editReply({ 
+                    content: '❌ This ticket is already closed.'
                 });
             }
 
+            // Mark as closed immediately
             ticket.closed = true;
             ticket.closedAt = new Date().toISOString();
             ticket.closedBy = interaction.user.id;
             saveTickets();
 
-            const channel = interaction.guild.channels.cache.get(ticket.channelId);
-            if (channel) {
-                try {
-                    const transcriptData = await generateTranscript(channel, ticket);
-                    if (transcriptData) {
-                        await sendTranscriptToChannel(interaction.guild, ticket, transcriptData);
-                        
-                        await channel.send({
-                            embeds: [
-                                new EmbedBuilder()
-                                    .setTitle('📄 Transcript Generated')
-                                    .setDescription(`A transcript of this ticket has been saved.`)
-                                    .setColor(0x2ecc71)
-                                    .setTimestamp()
-                            ]
-                        });
-                    }
-                } catch (error) {
-                    console.error('Failed to generate transcript:', error);
-                }
-            }
-
-            await interaction.reply({ 
-                content: '🔒 Closing ticket... Transcript generated.' 
-            });
-
+            // Disable buttons immediately
             const disabledButtons = new ActionRowBuilder()
                 .addComponents(
                     new ButtonBuilder()
@@ -443,19 +407,70 @@ client.on(Events.InteractionCreate, async interaction => {
                 );
 
             await interaction.message.edit({ components: [disabledButtons] });
+            
+            await interaction.editReply({ 
+                content: '🔒 Closing ticket and generating transcript...' 
+            });
 
+            // Generate transcript in background
+            const channel = interaction.guild.channels.cache.get(ticket.channelId);
+            if (channel) {
+                try {
+                    // Let user know transcript is being generated
+                    await channel.send({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setTitle('📄 Generating Transcript')
+                                .setDescription(`This ticket is being closed. Generating transcript...`)
+                                .setColor(0xf39c12)
+                                .setTimestamp()
+                        ]
+                    });
+
+                    // Generate transcript
+                    const transcriptData = await generateTranscript(channel, ticket);
+                    if (transcriptData) {
+                        await sendTranscriptToChannel(interaction.guild, ticket, transcriptData);
+                        
+                        await channel.send({
+                            embeds: [
+                                new EmbedBuilder()
+                                    .setTitle('✅ Transcript Generated')
+                                    .setDescription(`Ticket transcript has been saved.`)
+                                    .setColor(0x2ecc71)
+                                    .setTimestamp()
+                            ]
+                        });
+                        
+                        await interaction.editReply({ 
+                            content: '✅ Ticket closed and transcript generated!' 
+                        });
+                    } else {
+                        await interaction.editReply({ 
+                            content: '✅ Ticket closed (failed to generate transcript)' 
+                        });
+                    }
+                } catch (error) {
+                    console.error('Failed to generate transcript:', error);
+                    await interaction.editReply({ 
+                        content: '✅ Ticket closed (transcript generation failed)' 
+                    });
+                }
+            }
+
+            // Delete channel after delay
             setTimeout(async () => {
                 try {
                     const channel = interaction.guild.channels.cache.get(ticket.channelId);
                     if (channel) {
-                        await channel.delete('Ticket closed - transcript saved');
+                        await channel.delete('Ticket closed');
                         delete tickets[ticketId];
                         saveTickets();
                     }
                 } catch (error) {
                     console.error('Error deleting channel:', error);
                 }
-            }, 5000);
+            }, 10000); // Give 10 seconds for transcript
         }
     }
 });
